@@ -6,8 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import httpx
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 
 @dataclass
@@ -36,6 +36,26 @@ def _cfg(env_file_values: dict[str, str], key: str, default: str = "") -> str:
     return os.getenv(key) or env_file_values.get(key) or default
 
 
+def _http_get(endpoint: str, headers: dict[str, str], timeout_seconds: float) -> tuple[int, str, Any | None]:
+    req = urlrequest.Request(endpoint, headers=headers, method="GET")
+    try:
+        with urlrequest.urlopen(req, timeout=timeout_seconds) as resp:
+            status = int(resp.status)
+            text = resp.read().decode("utf-8", errors="replace")
+    except urlerror.HTTPError as exc:
+        status = int(exc.code)
+        text = exc.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    parsed: Any | None = None
+    try:
+        parsed = json.loads(text) if text else None
+    except Exception:
+        parsed = None
+    return status, text, parsed
+
+
 def _check_vast(
     *,
     base_url: str,
@@ -48,35 +68,30 @@ def _check_vast(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = httpx.get(endpoint, headers=headers, timeout=timeout_seconds)
-        payload: Any
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-        if response.status_code == 200 and isinstance(payload, dict):
+        status_code, raw_text, payload = _http_get(endpoint, headers, timeout_seconds)
+        if status_code == 200 and isinstance(payload, dict):
             offers = payload.get("offers")
             if isinstance(offers, list):
                 return CheckResult(
                     provider="vast.ai",
                     ok=True,
-                    status_code=response.status_code,
+                    status_code=status_code,
                     endpoint=endpoint,
                     detail=f"offers={len(offers)}",
                 )
             return CheckResult(
                 provider="vast.ai",
                 ok=False,
-                status_code=response.status_code,
+                status_code=status_code,
                 endpoint=endpoint,
                 detail="response json does not contain offers[]",
             )
         return CheckResult(
             provider="vast.ai",
             ok=False,
-            status_code=response.status_code,
+            status_code=status_code,
             endpoint=endpoint,
-            detail=response.text[:300] if response.text else "non-200 response",
+            detail=raw_text[:300] if raw_text else "non-200 response",
         )
     except Exception as exc:
         return CheckResult(
@@ -101,21 +116,21 @@ def _check_runpod(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = httpx.get(endpoint, headers=headers, timeout=timeout_seconds)
-        if response.status_code == 200:
+        status_code, raw_text, _ = _http_get(endpoint, headers, timeout_seconds)
+        if status_code == 200:
             return CheckResult(
                 provider="runpod",
                 ok=True,
-                status_code=response.status_code,
+                status_code=status_code,
                 endpoint=endpoint,
                 detail="authorized",
             )
         return CheckResult(
             provider="runpod",
             ok=False,
-            status_code=response.status_code,
+            status_code=status_code,
             endpoint=endpoint,
-            detail=response.text[:300] if response.text else "non-200 response",
+            detail=raw_text[:300] if raw_text else "non-200 response",
         )
     except Exception as exc:
         return CheckResult(
@@ -177,4 +192,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
