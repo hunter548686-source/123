@@ -16,6 +16,10 @@
 - 已初始化后台管理员账号：
   - `owner@example.com` / `pass1234`（role=`admin`）
 - 已同步更新 `.ai/deploy-notes.md` 为自有服务器版本。
+- 已新增仓库内自托管部署工具：
+  - `infra/deploy/install_linux.sh`（一键部署 API/Web/Worker + nginx + systemd）
+  - `infra/deploy/enable_https.sh`（Certbot/Nginx 一键启用 HTTPS）
+  - `infra/deploy/README.md`（运维执行手册）
 
 ## 当前线上地址
 - 网站首页：`http://gpu.144.202.58.159.sslip.io`
@@ -32,4 +36,3 @@
 - 环境文件：`/opt/stablegpu/repo/.env`
 - nginx 配置：`/etc/nginx/sites-available/stablegpu`
 - 服务运行状态：三服务均为 `active (running)`。
-

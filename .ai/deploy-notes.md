@@ -73,3 +73,12 @@ NEXT_PUBLIC_API_BASE_URL=http://gpu.144.202.58.159.sslip.io npm run build
 systemctl restart stablegpu-api.service stablegpu-web.service stablegpu-worker.service
 ```
 
+## 仓库内可复用部署脚本（新增）
+- `infra/deploy/install_linux.sh`
+- `infra/deploy/enable_https.sh`
+- `infra/deploy/README.md`
+
+推荐方式：
+1. 服务器拉取最新代码。
+2. 运行 `bash infra/deploy/install_linux.sh` 完成依赖、构建、systemd、nginx 全链路安装。
+3. 在有正式域名时运行 `bash infra/deploy/enable_https.sh` 打开 HTTPS。

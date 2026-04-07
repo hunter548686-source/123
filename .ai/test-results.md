@@ -63,3 +63,13 @@ Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/admin"
 ## 7) 已知限制
 - 当前使用 HTTP 域名，未配置 TLS 证书。
 - 当前 adapter 默认 `database_mock`，真实 provider key 待注入后再切换。
+
+## 8) 本轮改动回归验证
+执行（本机）：
+```powershell
+python -m pytest .\apps\api\tests .\apps\worker\tests
+```
+
+结果：
+- `15 passed`
+- 新增部署脚本未影响现有 API/worker 测试基线。
