@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+:root {
+  --background: #07111a;
+  --surface: #0d1a24;
+  --surface-strong: #112433;
+  --foreground: #eff7ff;
+  --muted: #95a9bb;
+  --line: rgba(188, 214, 238, 0.16);
+  --accent: #32d8b7;
+  --accent-strong: #4ca9ff;
+  --warning: #ffb86b;
+  --danger: #ff6b6b;
+  --success: #58d68d;
+  --panel-shadow: 0 24px 90px rgba(4, 12, 22, 0.35);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(76, 169, 255, 0.18), transparent 30%),
+    radial-gradient(circle at 85% 18%, rgba(50, 216, 183, 0.14), transparent 24%),
+    linear-gradient(180deg, #07111a 0%, #08131d 35%, #0b1822 100%);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), "Noto Sans SC", sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.display-font {
+  font-family: var(--font-display), "Space Grotesk", sans-serif;
+}
+
+.shell-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 42px 42px;
+}
+
+.glass-panel {
+  background: linear-gradient(180deg, rgba(16, 29, 42, 0.9), rgba(10, 20, 30, 0.9));
+  border: 1px solid var(--line);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.muted-text {
+  color: var(--muted);
+}
+
+.hero-glow {
+  position: relative;
+}
+
+.hero-glow::after {
+  content: "";
+  position: absolute;
+  inset: -14% 18% auto auto;
+  width: 18rem;
+  height: 18rem;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(50, 216, 183, 0.18), transparent 68%);
+  filter: blur(18px);
+  animation: drift 12s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.fade-up {
+  animation: fadeUp 0.8s ease both;
+}
+
+@keyframes drift {
+  from {
+    transform: translateY(0) translateX(0);
+  }
+  to {
+    transform: translateY(16px) translateX(-24px);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
