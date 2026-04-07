@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     vast_ai_base_url: str = "https://console.vast.ai/api/v0"
     vast_ai_api_key: str | None = None
     vast_ai_request_timeout_seconds: float = 30.0
-    vast_ai_offers_path: str = "/offers"
+    vast_ai_offers_path: str = "/bundles/"
     vast_ai_submit_path: str = "/tasks"
     vast_ai_status_path_template: str = "/tasks/{external_task_id}"
     vast_ai_cancel_path_template: str = "/tasks/{external_task_id}/cancel"

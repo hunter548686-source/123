@@ -1,76 +1,47 @@
-# 测试结果（本轮部署验证）
+# 测试结果（2026-04-08）
 
-## 1) 服务器服务状态验证
-执行（VPS）：
+## A. HTTPS 验收
+命令（本机）：
+```powershell
+Invoke-WebRequest "https://gpu.144.202.58.159.sslip.io"
+Invoke-WebRequest "https://gpu.144.202.58.159.sslip.io/api/health"
+```
+
+结果：
+- 首页：HTTP 200
+- 健康检查：HTTP 200，返回 `{"status":"ok"}`
+
+## B. 服务状态验收（VPS）
+命令：
 ```bash
 systemctl status stablegpu-api.service
 systemctl status stablegpu-web.service
 systemctl status stablegpu-worker.service
 ```
-结果：
-- 三个服务均 `active (running)`。
 
-## 2) 服务器本机健康检查
-执行（VPS）：
+结果：
+- 三个服务均为 `active (running)`。
+
+## C. Provider 连通性预检
+脚本：
 ```bash
-curl -sSf http://127.0.0.1:8000/api/health
-curl -sSf http://127.0.0.1:3010
+python3 infra/deploy/provider_preflight.py
 ```
-结果：
-- API 返回 `{"status":"ok"}`。
-- Web 返回首页 HTML（200）。
 
-## 3) nginx 反代验证
-执行（VPS）：
-```bash
-nginx -t
-curl -sSf -H "Host: gpu.144.202.58.159.sslip.io" http://127.0.0.1/api/health
-```
-结果：
-- nginx 配置语法通过。
-- Host 路由命中成功，返回 `{"status":"ok"}`。
+本轮验证结果：
+- Vast.ai：可连通，`/bundles/` 返回有效 `offers[]`
+- Runpod：无 API Key 情况下 `/v1/pods` 返回 `401 Unauthorized`
 
-## 4) 外网可访问性验证
-执行（本机）：
-```powershell
-Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io"
-Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/api/health"
-Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/admin"
-```
-结果：
-- 三个入口均 HTTP 200。
+结论：
+- Vast 报价链路具备真实数据来源基础。
+- Runpod 真实调用仍需生产 API Key。
 
-## 5) 线上业务冒烟（真实链路）
-执行（本机脚本）：
-- `POST /api/auth/login`
-- `POST /api/quotes`
-- `POST /api/tasks`
-- 轮询 `GET /api/tasks/{task_id}`
-
-结果：
-- 新任务 `task_id=1`
-- 最终状态 `completed`
-- 说明 worker 调度链路已在服务器端闭环生效
-
-## 6) 管理账号初始化验证
-执行（VPS 数据库脚本）：
-- 创建/更新 `owner@example.com`，角色 `admin`
-- 钱包余额初始化 `1000.00`
-
-结果：
-- 用户存在并可用于后台登录。
-
-## 7) 已知限制
-- 当前使用 HTTP 域名，未配置 TLS 证书。
-- 当前 adapter 默认 `database_mock`，真实 provider key 待注入后再切换。
-
-## 8) 本轮改动回归验证
-执行（本机）：
+## D. 自动化回归（本地）
+命令：
 ```powershell
 python -m pytest .\apps\api\tests .\apps\worker\tests
 ```
 
 结果：
 - `15 passed`
-- 新增部署脚本未影响现有 API/worker 测试基线。
-- 追加 `switch_to_live_adapter.sh` 后再次回归，结果仍为 `15 passed`。
+

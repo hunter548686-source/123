@@ -74,6 +74,7 @@ STABLEGPU_CORS_ORIGINS=["${PUBLIC_URL}"]
 STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER=database_mock
 STABLEGPU_PROVIDER_MARKETPLACE_NAME=mock-aggregator
 STABLEGPU_ENABLE_LOCAL_EXECUTOR=false
+STABLEGPU_VAST_AI_OFFERS_PATH=/bundles/
 EOF
   chmod 600 "${SYSTEMD_ENV_FILE}"
 fi
@@ -192,4 +193,3 @@ echo "Deployment completed."
 echo "Public URL: ${PUBLIC_URL}"
 echo "Health URL: ${PUBLIC_URL}/api/health"
 echo "Docs URL: ${PUBLIC_URL}/docs"
-

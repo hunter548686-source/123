@@ -1,20 +1,16 @@
-# 审查总结（本轮）
+# 审查总结（2026-04-08）
 
-## Web 系统层审查
-- 页面逻辑：任务详情下载入口与后台监控入口可用。
-- 前后端契约：artifact 字段与监控接口已对齐并通过构建验证。
-- 数据结构：artifact 扩展字段已落模型与 SQL。
-- 错误处理：下载 URL 缺失时返回明确错误码与信息。
-- 后台运营闭环：`/admin/tasks` 已支持全量任务筛选与手动重试/取消，`/admin/tasks/[taskId]` 可查看运行与产物细节。
-- 权限边界：`/admin/users`、`/api/admin/*` 未登录返回 `Not authenticated`，符合后台权限要求。
+## Web 系统层
+- HTTPS 已启用，公网可访问。
+- 前后端路由与 API 健康检查正常。
+- 后台入口、任务链路和基础监控可用。
 
-## AI Agent / 调度层审查
-- provider 调度：已支持 `vast_ai` / `runpod` / `multi_provider_live`。
-- 状态流：新增 `cancelling` / `cleaning_up`，取消与失败链包含 cleanup。
-- 失败恢复：失败后可迁移重试并排除失败 provider。
-- 日志追踪：关键动作（下发、轮询、取消、cleanup、结果回收）均写事件。
+## AI Agent / 调度层
+- Provider 适配层已具备真实切换机制（`multi_provider_live`）。
+- Vast 报价路径已修正到真实可用接口（`/bundles/`）。
+- 预检脚本可在切换前识别连通性与鉴权问题。
 
-## 验证结论
-- 自动化测试通过（api + worker）。
-- 前端 lint/build 通过。
-- 本轮交付满足“真实 adapter + 完整状态机 + cost/artifact/download/monitoring 打通 + 后台运营闭环”目标。
+## 审查结论
+- 基础上线质量通过。
+- 仍有 1 个必须修复项：生产 provider API Key 缺失，导致无法完成真实 provider 全链路执行验收。
+

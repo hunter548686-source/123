@@ -63,6 +63,7 @@ PY
 upsert_env "STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER" "multi_provider_live"
 upsert_env "STABLEGPU_PROVIDER_MARKETPLACE_NAME" "vast-runpod-live"
 upsert_env "STABLEGPU_VAST_AI_BASE_URL" "${VAST_BASE_URL}"
+upsert_env "STABLEGPU_VAST_AI_OFFERS_PATH" "/bundles/"
 upsert_env "STABLEGPU_VAST_AI_API_KEY" "${VAST_KEY}"
 upsert_env "STABLEGPU_RUNPOD_BASE_URL" "${RUNPOD_BASE_URL}"
 upsert_env "STABLEGPU_RUNPOD_API_KEY" "${RUNPOD_KEY}"
@@ -76,4 +77,3 @@ systemctl --no-pager --full status "${SERVICE_PREFIX}-worker.service" | head -n 
 echo ""
 echo "Switched to multi_provider_live adapter."
 echo "Env file: ${ENV_FILE}"
-

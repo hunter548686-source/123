@@ -65,6 +65,12 @@ This will:
 - inject Vast.ai and Runpod API keys into env file
 - restart `stablegpu-api.service` and `stablegpu-worker.service`
 
+Preflight check before/after switching:
+
+```bash
+python3 infra/deploy/provider_preflight.py
+```
+
 ## 6) Environment file
 
 `install_linux.sh` creates a minimal `.env` only if none exists.

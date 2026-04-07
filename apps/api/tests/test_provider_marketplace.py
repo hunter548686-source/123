@@ -95,7 +95,7 @@ def test_remote_marketplace_contract_calls_generic_http_gateway(
     def fake_request(method, url, headers=None, json=None, timeout=None):
         del timeout
         calls.append((method, url, json, headers or {}))
-        if method == "GET" and url.endswith("/offers"):
+        if method == "GET" and (url.endswith("/offers") or url.endswith("/bundles/")):
             return FakeResponse(
                 {
                     "offers": [
@@ -213,7 +213,7 @@ def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatc
     def fake_vast_request(method, url, headers=None, json=None, timeout=None):
         del json, timeout
         assert headers is not None and headers.get("Authorization") == "Bearer vast-key"
-        if method == "GET" and url.endswith("/offers"):
+        if method == "GET" and (url.endswith("/offers") or url.endswith("/bundles/")):
             return FakeResponse(
                 {
                     "offers": [
