@@ -54,6 +54,17 @@ playwright.exe screenshot --device="Desktop Chrome" --wait-for-timeout=2500 --fu
 - `apps/web/admin-users-final.png`
 - 未登录访问后台时返回 `Not authenticated`（符合权限边界预期）。
 
+## 外网访问验证（部署态）
+命令：
+```powershell
+Invoke-WebRequest https://yesterday-cheque-great-meals.trycloudflare.com
+Invoke-WebRequest https://valid-occurs-algorithm-sleeping.trycloudflare.com/api/health
+```
+结果：
+- Web 外网入口可访问（HTTP 200）。
+- API 外网健康检查通过（`{"status":"ok"}`）。
+- 首页外网截图：`apps/web/deployed-homepage.png`。
+
 补充：
 - 生产构建启动验证：`http://localhost:3010`（`npm run start -- --hostname 0.0.0.0 --port 3010`）
 - API 服务启动验证：`http://127.0.0.1:8000`（`python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000`）

@@ -14,6 +14,20 @@
 - 生产建议：`STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER=multi_provider_live`
 - 开发回归可用：`database_mock`
 
+## 代码仓库
+- GitHub: `https://github.com/hunter548686-source/123`
+- 分支：`main`
+
+## 外网可访问地址（当前会话）
+- Web: `https://yesterday-cheque-great-meals.trycloudflare.com`
+- API: `https://valid-occurs-algorithm-sleeping.trycloudflare.com`
+- API Docs: `https://valid-occurs-algorithm-sleeping.trycloudflare.com/docs`
+
+说明：
+- 当前使用 Cloudflare Quick Tunnel，链接是临时地址，进程中断后会变化。
+- Web 构建时已注入 `NEXT_PUBLIC_API_BASE_URL` 指向当前 API 外网地址。
+- API 启动时已注入 `STABLEGPU_CORS_ORIGINS`，允许当前 Web 外网域名跨域访问。
+
 ## 发布检查
 1. 执行 DB 迁移至 `008`。
 2. 校验 provider API key 已注入。

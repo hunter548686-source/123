@@ -55,3 +55,9 @@
 - 新增 SQL 迁移：`infra/sql/008_artifact_delivery_columns.sql`
 - 更新 `.env` 示例，补充 vast/runpod 配置项。
 - API 默认 CORS 放开 `3000/3010` 本地端口，支持首页实时指标跨端口读取。
+- 已完成进库与上传：
+  - 远端仓库：`https://github.com/hunter548686-source/123`
+  - 分支：`main`
+- 已完成外网可访问部署（会话级临时发布）：
+  - Web：`https://yesterday-cheque-great-meals.trycloudflare.com`
+  - API：`https://valid-occurs-algorithm-sleeping.trycloudflare.com`
