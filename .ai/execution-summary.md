@@ -19,6 +19,7 @@
 - 已新增仓库内自托管部署工具：
   - `infra/deploy/install_linux.sh`（一键部署 API/Web/Worker + nginx + systemd）
   - `infra/deploy/enable_https.sh`（Certbot/Nginx 一键启用 HTTPS）
+  - `infra/deploy/switch_to_live_adapter.sh`（一键切换到 `multi_provider_live` 并重启服务）
   - `infra/deploy/README.md`（运维执行手册）
 
 ## 当前线上地址

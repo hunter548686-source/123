@@ -73,3 +73,4 @@ python -m pytest .\apps\api\tests .\apps\worker\tests
 结果：
 - `15 passed`
 - 新增部署脚本未影响现有 API/worker 测试基线。
+- 追加 `switch_to_live_adapter.sh` 后再次回归，结果仍为 `15 passed`。

@@ -51,7 +51,21 @@ systemctl restart stablegpu-api.service stablegpu-web.service stablegpu-worker.s
 journalctl -u stablegpu-api.service -n 200 --no-pager
 ```
 
-## 5) Environment file
+## 5) Switch from mock to real providers
+
+```bash
+export STABLEGPU_VAST_AI_API_KEY=your_vast_key
+export STABLEGPU_RUNPOD_API_KEY=your_runpod_key
+bash infra/deploy/switch_to_live_adapter.sh
+```
+
+This will:
+
+- set `STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER=multi_provider_live`
+- inject Vast.ai and Runpod API keys into env file
+- restart `stablegpu-api.service` and `stablegpu-worker.service`
+
+## 6) Environment file
 
 `install_linux.sh` creates a minimal `.env` only if none exists.
 
@@ -62,4 +76,3 @@ For production, you should edit:
 - `STABLEGPU_VAST_AI_API_KEY`
 - `STABLEGPU_RUNPOD_API_KEY`
 - CORS and model settings
-

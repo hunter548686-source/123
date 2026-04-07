@@ -76,6 +76,7 @@ systemctl restart stablegpu-api.service stablegpu-web.service stablegpu-worker.s
 ## 仓库内可复用部署脚本（新增）
 - `infra/deploy/install_linux.sh`
 - `infra/deploy/enable_https.sh`
+- `infra/deploy/switch_to_live_adapter.sh`
 - `infra/deploy/README.md`
 
 推荐方式：
