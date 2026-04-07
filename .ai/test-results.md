@@ -1,70 +1,54 @@
-# 测试结果（本轮）
+# 测试结果（本轮部署验证）
 
-## 后端/Worker
-命令：
-```powershell
-python -m pytest .\apps\api\tests .\apps\worker\tests
+## 1) 服务器服务状态验证
+执行（VPS）：
+```bash
+systemctl status stablegpu-api.service
+systemctl status stablegpu-web.service
+systemctl status stablegpu-worker.service
 ```
 结果：
-- `15 passed`
-- 新增/更新的 adapter、取消/cleanup 状态链、下载与监控接口测试均通过。
-- 新增后台任务运营接口测试通过（admin tasks detail/retry/cancel + admin users）。
+- 三个服务均 `active (running)`。
 
-补充验证（首页实时指标 API）：
-- `GET /api/home/metrics` 已纳入后端测试断言，验证通过。
-
-## 端到端链路验收
-命令：
-```powershell
-@'
-...（TestClient 脚本：register -> recharge -> quote -> create task -> process_pending_tasks -> task detail -> home metrics）
-'@ | python -
+## 2) 服务器本机健康检查
+执行（VPS）：
+```bash
+curl -sSf http://127.0.0.1:8000/api/health
+curl -sSf http://127.0.0.1:3010
 ```
 结果：
-- `task_status: completed`
-- `run_count: 1`
-- `artifact_count: 1`
-- `home_success_rate_7d: 100.0`
-- `home_provider_count: 3`
+- API 返回 `{"status":"ok"}`。
+- Web 返回首页 HTML（200）。
 
-## Web
-命令：
-```powershell
-npm run lint
-npm run build
-```
-目录：`apps/web`
-
-结果：
-- lint 通过
-- build 通过（Next.js 16.2.2）
-
-## 可视化验证
-命令：
-```powershell
-playwright.exe screenshot --device="Desktop Chrome" --wait-for-timeout=2500 --full-page http://localhost:3010 "apps/web/homepage-live-metrics.png"
+## 3) nginx 反代验证
+执行（VPS）：
+```bash
+nginx -t
+curl -sSf -H "Host: gpu.144.202.58.159.sslip.io" http://127.0.0.1/api/health
 ```
 结果：
-- 首页可访问（`http://localhost:3010`，HTTP 200）
-- 首页指标卡已显示实时 API 值（`15m 00s / 100.0% / 3 / 100.0%`）。
-- 生成实拍截图：`apps/web/homepage-live-metrics.png`
+- nginx 配置语法通过。
+- Host 路由命中成功，返回 `{"status":"ok"}`。
 
-后台页面补充：
-- `apps/web/admin-tasks-final.png`
-- `apps/web/admin-users-final.png`
-- 未登录访问后台时返回 `Not authenticated`（符合权限边界预期）。
-
-## 外网访问验证（部署态）
-命令：
+## 4) 外网可访问性验证
+执行（本机）：
 ```powershell
-Invoke-WebRequest https://yesterday-cheque-great-meals.trycloudflare.com
-Invoke-WebRequest https://valid-occurs-algorithm-sleeping.trycloudflare.com/api/health
+Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io"
+Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/api/health"
+Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/admin"
 ```
 结果：
-- Web 外网入口可访问（HTTP 200）。
-- API 外网健康检查通过（`{"status":"ok"}`）。
-- 首页外网截图：`apps/web/deployed-homepage.png`。
+- 三个入口均 HTTP 200。
 
-补充：
-- 生产构建启动验证：`http://localhost:3010`（`npm run start -- --hostname 0.0.0.0 --port 3010`）
-- API 服务启动验证：`http://127.0.0.1:8000`（`python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000`）
+## 5) 管理账号初始化验证
+执行（VPS 数据库脚本）：
+- 创建/更新 `owner@example.com`，角色 `admin`
+- 钱包余额初始化 `1000.00`
+
+结果：
+- 用户存在并可用于后台登录。
+
+## 6) 已知限制
+- 当前使用 HTTP 域名，未配置 TLS 证书。
+- 当前 adapter 默认 `database_mock`，真实 provider key 待注入后再切换。
+
