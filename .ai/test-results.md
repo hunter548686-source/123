@@ -40,7 +40,19 @@ Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/admin"
 结果：
 - 三个入口均 HTTP 200。
 
-## 5) 管理账号初始化验证
+## 5) 线上业务冒烟（真实链路）
+执行（本机脚本）：
+- `POST /api/auth/login`
+- `POST /api/quotes`
+- `POST /api/tasks`
+- 轮询 `GET /api/tasks/{task_id}`
+
+结果：
+- 新任务 `task_id=1`
+- 最终状态 `completed`
+- 说明 worker 调度链路已在服务器端闭环生效
+
+## 6) 管理账号初始化验证
 执行（VPS 数据库脚本）：
 - 创建/更新 `owner@example.com`，角色 `admin`
 - 钱包余额初始化 `1000.00`
@@ -48,7 +60,6 @@ Invoke-WebRequest "http://gpu.144.202.58.159.sslip.io/admin"
 结果：
 - 用户存在并可用于后台登录。
 
-## 6) 已知限制
+## 7) 已知限制
 - 当前使用 HTTP 域名，未配置 TLS 证书。
 - 当前 adapter 默认 `database_mock`，真实 provider key 待注入后再切换。
-
