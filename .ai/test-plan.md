@@ -1,27 +1,37 @@
-# 当前阶段测试计划
+# Test Plan (Current Stage)
 
-## 1. Adapter 契约测试
-- `test_provider_marketplace.py`
-  - database mock 五动作 + cleanup。
-  - remote marketplace 五动作 + cleanup。
-  - vast/runpod payload 归一化。
-  - base URL 缺失错误路径。
+## 1) Unit / Contract Tests
+- File: `apps/api/tests/test_provider_marketplace.py`
+- Cover:
+  - database mock adapter
+  - generic remote adapter
+  - Vast real-contract lifecycle
+  - Runpod GraphQL+REST lifecycle
+  - missing base URL failure path
 
-## 2. 端到端任务流测试
-- `test_auth_wallet_tasks.py`
-  - 注册/充值/报价/创建任务/worker 执行。
-  - 产物下载入口可返回 download_url。
-  - 后台监控接口可返回有效结构。
+## 2) End-to-End API Workflow Tests
+- File: `apps/api/tests/test_auth_wallet_tasks.py`
+- Cover:
+  - auth + wallet + quote + task create
+  - worker processing
+  - task detail/events/runs/artifacts
+  - artifact download endpoint
+  - admin monitoring endpoint
 
-## 3. Worker 状态流测试
-- `test_worker_flow.py`
-  - 失败后迁移重试并最终完成。
-  - cancelling 任务可走 cancel+cleanup 后终态 cancelled。
+## 3) Worker Flow Tests
+- File: `apps/worker/tests/test_worker_flow.py`
+- Cover:
+  - retry after first failure
+  - cancel flow to terminal cancelled state
 
-## 4. Web 验证
-- `npm run lint`
-- `npm run build`
+## 4) Deploy Script Validation
+- Script:
+  - `infra/deploy/provider_preflight.py`
+- Validate:
+  - Vast bundles query path
+  - Runpod REST auth + GraphQL offers query path
 
-## 5. 回归关注点
-- 旧 adapter（database_mock/remote_marketplace）兼容性。
-- 任务详情与后台页在新字段下不崩溃。
+## 5) Regression Command
+```bash
+python -m pytest apps/api/tests apps/worker/tests -q
+```
