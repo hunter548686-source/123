@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
+from urllib.parse import quote_plus
 
 import httpx
 from sqlalchemy import select
@@ -177,11 +179,43 @@ def _safe_decimal(value: Any) -> Decimal | None:
         return None
 
 
+def _safe_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _pick_first(item: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in item and item[key] is not None:
             return item[key]
     return None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        return datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _runtime_seconds_from_datetimes(started_at: Any, ended_at: Any | None = None) -> int | None:
+    start_dt = _parse_datetime(started_at)
+    if start_dt is None:
+        return None
+    end_dt = _parse_datetime(ended_at) if ended_at else datetime.now(UTC)
+    if end_dt is None:
+        end_dt = datetime.now(UTC)
+    delta = int((end_dt - start_dt).total_seconds())
+    return max(delta, 0)
 
 
 @dataclass
@@ -327,38 +361,59 @@ class RemoteMarketplaceAdapter:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _request_json(
+    def _request_payload(
         self,
         method: str,
-        path: str,
+        path_or_url: str,
         *,
         json_body: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        url = f"{self._require_base_url()}{path}"
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            url = path_or_url
+        else:
+            url = f"{self._require_base_url()}{path_or_url}"
         try:
             response = httpx.request(
                 method,
                 url,
-                headers=self._headers(),
+                headers=headers or self._headers(),
                 json=json_body,
                 timeout=self.request_timeout_seconds,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise ProviderMarketplaceError(
-                f"{self.adapter_key} request failed: {method} {path}: {exc}"
+                f"{self.adapter_key} request failed: {method} {path_or_url}: {exc}"
             ) from exc
 
+        if response.status_code == 204:
+            return {}
         try:
             payload = response.json()
         except ValueError as exc:
             raise ProviderMarketplaceError(
-                f"{self.adapter_key} returned non-JSON response for {method} {path}"
+                f"{self.adapter_key} returned non-JSON response for {method} {path_or_url}"
             ) from exc
+        return payload
 
+    def _request_json(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._request_payload(
+            method,
+            path_or_url,
+            json_body=json_body,
+            headers=headers,
+        )
         if not isinstance(payload, dict):
             raise ProviderMarketplaceError(
-                f"{self.adapter_key} returned unexpected payload for {method} {path}"
+                f"{self.adapter_key} returned unexpected payload for {method} {path_or_url}"
             )
         return payload
 
@@ -405,8 +460,12 @@ class RemoteMarketplaceAdapter:
 
     def list_offers(self, db: Session) -> list[ProviderOfferSnapshot]:
         del db
-        payload = self._request_json("GET", self.offers_path)
-        offer_items = payload.get("offers", payload.get("items", payload.get("data")))
+        payload = self._request_payload("GET", self.offers_path)
+        offer_items: Any | None = None
+        if isinstance(payload, dict):
+            offer_items = payload.get("offers", payload.get("items", payload.get("data")))
+        elif isinstance(payload, list):
+            offer_items = payload
         if offer_items is None:
             raise ProviderMarketplaceError(
                 f"{self.adapter_key} offer payload is missing offers[]"
@@ -565,6 +624,7 @@ class VastAiMarketplaceAdapter(RemoteMarketplaceAdapter):
         )
         if not gpu_type or price_per_hour is None:
             raise ProviderMarketplaceError("vast_ai offer payload is missing gpu/price fields")
+        offer_id = _pick_first(item, "id", "ask_id", "ask", "bundle_id")
         return ProviderOfferSnapshot(
             provider="vast.ai",
             gpu_type=str(gpu_type),
@@ -581,35 +641,657 @@ class VastAiMarketplaceAdapter(RemoteMarketplaceAdapter):
             success_rate=_safe_decimal(
                 _pick_first(item, "success_rate", "success_ratio", "success")
             ),
-            raw_payload=item,
+            raw_payload={**item, "offer_id": offer_id},
+        )
+
+    def _search_offers_payload(self) -> dict[str, Any]:
+        return {
+            "verified": {"eq": True},
+            "rentable": {"eq": True},
+            "limit": 80,
+            "order": [["dph_total", "asc"]],
+        }
+
+    def list_offers(self, db: Session) -> list[ProviderOfferSnapshot]:
+        del db
+        payload = self._request_payload(
+            "POST",
+            self.offers_path,
+            json_body=self._search_offers_payload(),
+        )
+        offer_items: list[Any] | None = None
+        if isinstance(payload, dict):
+            offer_items = payload.get("offers", payload.get("items", payload.get("data")))
+        elif isinstance(payload, list):
+            offer_items = payload
+        if offer_items is None:
+            raise ProviderMarketplaceError("vast_ai offer payload is missing offers[]")
+        return [self._normalize_offer(item) for item in offer_items if isinstance(item, dict)]
+
+    def _resolve_offer_id(
+        self,
+        db: Session,
+        submission: ProviderMarketplaceTaskSubmission,
+    ) -> str:
+        recommended = (submission.quote_snapshot or {}).get("recommended_offer") or {}
+        recommended_payload = recommended.get("raw_payload") or {}
+        candidate_offer_id = _pick_first(
+            recommended_payload if isinstance(recommended_payload, dict) else {},
+            "offer_id",
+            "id",
+            "ask_id",
+            "ask",
+            "bundle_id",
+        )
+        if candidate_offer_id is None:
+            candidate_offer_id = _pick_first(
+                recommended if isinstance(recommended, dict) else {},
+                "offer_id",
+                "id",
+                "ask_id",
+                "ask",
+                "bundle_id",
+            )
+        if candidate_offer_id is not None:
+            return str(candidate_offer_id)
+
+        offers = self.list_offers(db)
+        preferred_gpu = (submission.preferred_gpu_type or "").strip().lower()
+        for offer in offers:
+            raw = dict(offer.raw_payload or {})
+            offer_id = _pick_first(raw, "offer_id", "id", "ask_id", "ask", "bundle_id")
+            if offer_id is None:
+                continue
+            if preferred_gpu and preferred_gpu not in offer.gpu_type.strip().lower():
+                continue
+            return str(offer_id)
+
+        for offer in offers:
+            raw = dict(offer.raw_payload or {})
+            offer_id = _pick_first(raw, "offer_id", "id", "ask_id", "ask", "bundle_id")
+            if offer_id is not None:
+                return str(offer_id)
+
+        raise ProviderMarketplaceError("vast_ai could not resolve offer_id for task submission")
+
+    def _build_submit_payload(
+        self,
+        submission: ProviderMarketplaceTaskSubmission,
+    ) -> dict[str, Any]:
+        runtime = dict(submission.input_payload.get("provider_runtime") or {})
+        payload: dict[str, Any] = {
+            "image": str(runtime.get("image") or "ubuntu:22.04"),
+            "disk": int(runtime.get("disk") or submission.input_payload.get("disk_gb") or 20),
+            "runtype": str(runtime.get("runtype") or "ssh_direct"),
+            "label": str(runtime.get("label") or f"stablegpu-task-{submission.local_task_id}"),
+        }
+        optional_keys = [
+            "template_hash_id",
+            "env",
+            "onstart",
+            "args",
+            "args_str",
+            "price",
+            "volume_info",
+            "image_login",
+        ]
+        for key in optional_keys:
+            value = runtime.get(key)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    def submit_task(
+        self,
+        db: Session,
+        submission: ProviderMarketplaceTaskSubmission,
+    ) -> ProviderMarketplaceTaskHandle:
+        offer_id = self._resolve_offer_id(db, submission)
+        submit_path = self.submit_path
+        if "{offer_id}" in submit_path:
+            path = submit_path.format(offer_id=offer_id)
+        else:
+            path = f"/asks/{offer_id}/"
+
+        payload = self._request_json(
+            "PUT",
+            path,
+            json_body=self._build_submit_payload(submission),
+        )
+        external_task_id = _pick_first(
+            payload,
+            "new_contract",
+            "instance_id",
+            "id",
+            "contract_id",
+        )
+        if external_task_id is None:
+            raise ProviderMarketplaceError(
+                "vast_ai create instance response is missing instance identifier"
+            )
+
+        return ProviderMarketplaceTaskHandle(
+            external_task_id=str(external_task_id),
+            accepted=bool(payload.get("success", True)),
+            status=str(payload.get("status") or "submitted"),
+            provider="vast.ai",
+            gpu_type=submission.preferred_gpu_type,
+            message=str(payload.get("msg") or "vast_ai instance requested"),
+            raw_payload={**payload, "offer_id": offer_id},
+        )
+
+    def _instance_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        instance_obj = payload.get("instances")
+        if isinstance(instance_obj, dict):
+            return instance_obj
+        if isinstance(instance_obj, list) and instance_obj:
+            candidate = instance_obj[0]
+            if isinstance(candidate, dict):
+                return candidate
+        return payload
+
+    def _map_instance_status(self, instance: dict[str, Any]) -> tuple[str, int, str]:
+        settings = get_settings()
+        raw_status = str(
+            _pick_first(instance, "actual_status", "status", "state", "machine_status")
+            or "unknown"
+        ).strip()
+        lowered = raw_status.lower()
+        if lowered in {"offline", "failed", "error", "stopped_error"}:
+            return "failed", 100, raw_status
+        if lowered in {"destroyed", "terminated", "exited"}:
+            return "cancelled", 100, raw_status
+        if lowered in {"running", "loaded", "ready", "online"}:
+            if settings.provider_ready_state_is_success:
+                return "succeeded", 100, raw_status
+            return "running", 75, raw_status
+        if lowered in {"creating", "loading", "initializing", "starting"}:
+            return "provisioning", 45, raw_status
+        return "running", 65, raw_status
+
+    def get_task_status(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceTaskStatus:
+        del db
+        path = self.status_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("GET", path)
+        instance = self._instance_payload(payload)
+        normalized_status, default_progress, raw_status = self._map_instance_status(instance)
+        progress_percent = (
+            _safe_int(
+                _pick_first(instance, "progress_percent", "progress", "progressPercent")
+            )
+            or default_progress
+        )
+        gpu_type = _pick_first(instance, "gpu_name", "gpu_type", "gpu")
+        return ProviderMarketplaceTaskStatus(
+            external_task_id=str(
+                _pick_first(instance, "id", "instance_id") or external_task_id
+            ),
+            status=normalized_status,
+            progress_percent=max(0, min(progress_percent, 100)),
+            provider="vast.ai",
+            gpu_type=str(gpu_type) if gpu_type is not None else None,
+            stage=str(_pick_first(instance, "actual_status", "status", "state") or raw_status),
+            message=str(_pick_first(instance, "label", "hostname", "msg") or raw_status),
+            retryable=normalized_status in {"failed", "cancelled"},
+            raw_payload=payload,
+        )
+
+    def cancel_task(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceCancelResult:
+        del db
+        path = self.cancel_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("DELETE", path)
+        return ProviderMarketplaceCancelResult(
+            external_task_id=external_task_id,
+            cancelled=bool(payload.get("success", True)),
+            status="cancelled",
+            provider="vast.ai",
+            message=str(payload.get("msg") or "vast_ai instance cancellation sent"),
+            raw_payload=payload,
+        )
+
+    def cleanup_task(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceCleanupResult:
+        del db
+        path = self.cleanup_path_template.format(external_task_id=external_task_id)
+        try:
+            payload = self._request_json("DELETE", path)
+        except ProviderMarketplaceError as exc:
+            message = str(exc)
+            if "404" in message:
+                return ProviderMarketplaceCleanupResult(
+                    external_task_id=external_task_id,
+                    cleaned=True,
+                    status="already_gone",
+                    provider="vast.ai",
+                    message=message,
+                    raw_payload={},
+                )
+            raise
+        return ProviderMarketplaceCleanupResult(
+            external_task_id=external_task_id,
+            cleaned=bool(payload.get("success", True)),
+            status="cleaned",
+            provider="vast.ai",
+            message=str(payload.get("msg") or "vast_ai cleanup finished"),
+            raw_payload=payload,
+        )
+
+    def collect_task_result(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceResult:
+        del db
+        path = self.result_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("GET", path)
+        instance = self._instance_payload(payload)
+
+        runtime_seconds = (
+            _safe_int(
+                _pick_first(instance, "duration", "runtime_seconds", "uptime_seconds")
+            )
+            or _runtime_seconds_from_datetimes(
+                _pick_first(instance, "start_date", "last_update", "created_at"),
+                _pick_first(instance, "end_date"),
+            )
+            or 600
+        )
+        hourly_price = _safe_decimal(_pick_first(instance, "dph_total", "dph", "cost_per_hour"))
+        provider_cost = (
+            (hourly_price * Decimal(str(runtime_seconds)) / Decimal("3600")).quantize(
+                Decimal("0.0001")
+            )
+            if hourly_price is not None
+            else Decimal("0")
+        )
+
+        instance_url = f"{self._require_base_url()}/instances/{external_task_id}/"
+        artifact = ProviderMarketplaceArtifact(
+            kind="runtime_manifest",
+            uri=instance_url,
+            download_url=instance_url,
+            metadata={
+                "provider": "vast.ai",
+                "instance_id": external_task_id,
+                "gpu_type": _pick_first(instance, "gpu_name", "gpu", "gpu_type"),
+                "status": _pick_first(instance, "actual_status", "status"),
+            },
+        )
+
+        return ProviderMarketplaceResult(
+            external_task_id=external_task_id,
+            status="succeeded",
+            provider="vast.ai",
+            summary=str(
+                _pick_first(instance, "label", "actual_status", "status")
+                or "vast_ai runtime ready"
+            ),
+            artifacts=[artifact],
+            usage={
+                "billable_seconds": runtime_seconds,
+                "provider_cost": float(provider_cost),
+                "hourly_price": float(hourly_price) if hourly_price is not None else None,
+            },
+            raw_payload=payload,
         )
 
 
 @dataclass
 class RunpodMarketplaceAdapter(RemoteMarketplaceAdapter):
     adapter_key: str = "runpod"
+    graphql_url: str = "https://api.runpod.io/graphql"
+
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        headers["Content-Type"] = "application/json"
+        return headers
 
     def _normalize_offer(self, item: dict[str, Any]) -> ProviderOfferSnapshot:
-        gpu_type = _pick_first(item, "gpu_type", "gpuType", "displayName", "name")
-        price_per_hour = _safe_decimal(
-            _pick_first(item, "price_per_hour", "pricePerHour", "price", "lowestPrice")
-        )
-        if price_per_hour is None and isinstance(item.get("secureCloud"), dict):
-            price_per_hour = _safe_decimal(item["secureCloud"].get("lowestPrice"))
-        if price_per_hour is None and isinstance(item.get("communityCloud"), dict):
-            price_per_hour = _safe_decimal(item["communityCloud"].get("lowestPrice"))
+        gpu_type = _pick_first(item, "gpu_type", "gpuType", "displayName", "name", "id")
+        lowest_price = item.get("lowestPrice")
+        price_per_hour = None
+        if isinstance(lowest_price, dict):
+            price_per_hour = _safe_decimal(
+                _pick_first(lowest_price, "uninterruptablePrice", "minimumBidPrice")
+            )
+        if price_per_hour is None:
+            price_per_hour = _safe_decimal(
+                _pick_first(item, "price_per_hour", "pricePerHour", "price", "lowestPrice")
+            )
         if not gpu_type or price_per_hour is None:
             raise ProviderMarketplaceError("runpod offer payload is missing gpu/price fields")
-        region = _pick_first(item, "region", "location", "dataCenterId", "countryCode")
+        stock_status = (
+            _pick_first(lowest_price, "stockStatus")
+            if isinstance(lowest_price, dict)
+            else None
+        )
+        reliability_score = Decimal("0.90")
+        if isinstance(stock_status, str):
+            status_map = {
+                "high": Decimal("0.98"),
+                "medium": Decimal("0.92"),
+                "low": Decimal("0.80"),
+                "none": Decimal("0.45"),
+            }
+            reliability_score = status_map.get(stock_status.strip().lower(), reliability_score)
         return ProviderOfferSnapshot(
             provider="runpod",
             gpu_type=str(gpu_type),
-            region=str(region) if region is not None else None,
+            region=str(_pick_first(item, "region", "location", "countryCode"))
+            if _pick_first(item, "region", "location", "countryCode") is not None
+            else None,
             price_per_hour=price_per_hour,
-            reliability_score=_safe_decimal(_pick_first(item, "reliability_score", "reliability")),
-            startup_score=_safe_decimal(_pick_first(item, "startup_score", "startup")),
-            success_rate=_safe_decimal(_pick_first(item, "success_rate", "successRate")),
+            reliability_score=reliability_score,
+            startup_score=_safe_decimal(_pick_first(item, "startup_score", "startup"))
+            or Decimal("0.85"),
+            success_rate=_safe_decimal(_pick_first(item, "success_rate", "successRate"))
+            or Decimal("0.90"),
             raw_payload=item,
+        )
+
+    def _graphql_request(self, query: str) -> dict[str, Any]:
+        if not self.api_key:
+            raise ProviderMarketplaceError("runpod requires API key for GraphQL offers query")
+        connector = "&" if "?" in self.graphql_url else "?"
+        url = f"{self.graphql_url}{connector}api_key={quote_plus(self.api_key)}"
+        payload = self._request_json(
+            "POST",
+            url,
+            json_body={"query": query},
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+        errors = payload.get("errors")
+        if isinstance(errors, list) and errors:
+            raise ProviderMarketplaceError(f"runpod graphql returned errors: {errors}")
+        return payload
+
+    def list_offers(self, db: Session) -> list[ProviderOfferSnapshot]:
+        del db
+        query = """
+        query {
+          gpuTypes {
+            id
+            displayName
+            memoryInGb
+            secureCloud
+            communityCloud
+            lowestPrice(input: { gpuCount: 1 }) {
+              minimumBidPrice
+              uninterruptablePrice
+              stockStatus
+              availableGpuCounts
+            }
+          }
+        }
+        """
+        payload = self._graphql_request(query)
+        data = payload.get("data") or {}
+        offer_items = data.get("gpuTypes")
+        if not isinstance(offer_items, list):
+            raise ProviderMarketplaceError("runpod graphql payload is missing gpuTypes[]")
+        normalized: list[ProviderOfferSnapshot] = []
+        for item in offer_items:
+            if isinstance(item, dict):
+                normalized.append(self._normalize_offer(item))
+        return normalized
+
+    def _resolve_gpu_type_id(
+        self,
+        db: Session,
+        submission: ProviderMarketplaceTaskSubmission,
+    ) -> str:
+        preferred_gpu = (submission.preferred_gpu_type or "").strip().lower()
+        recommended = (submission.quote_snapshot or {}).get("recommended_offer") or {}
+        recommended_payload = recommended.get("raw_payload") or {}
+        if isinstance(recommended_payload, dict):
+            gpu_type_id = _pick_first(recommended_payload, "id", "gpuTypeId", "gpu_type_id")
+            if gpu_type_id is not None:
+                return str(gpu_type_id)
+        if isinstance(recommended, dict):
+            gpu_type_id = _pick_first(recommended, "id", "gpuTypeId", "gpu_type_id")
+            if gpu_type_id is not None:
+                return str(gpu_type_id)
+
+        offers = self.list_offers(db)
+        for offer in offers:
+            raw = dict(offer.raw_payload or {})
+            gpu_type_id = _pick_first(raw, "id", "gpuTypeId", "gpu_type_id")
+            if gpu_type_id is None:
+                continue
+            if preferred_gpu and preferred_gpu not in offer.gpu_type.strip().lower():
+                continue
+            return str(gpu_type_id)
+
+        for offer in offers:
+            raw = dict(offer.raw_payload or {})
+            gpu_type_id = _pick_first(raw, "id", "gpuTypeId", "gpu_type_id")
+            if gpu_type_id is not None:
+                return str(gpu_type_id)
+
+        raise ProviderMarketplaceError("runpod could not resolve gpuTypeId for submission")
+
+    def _build_create_payload(
+        self,
+        submission: ProviderMarketplaceTaskSubmission,
+        gpu_type_id: str,
+    ) -> dict[str, Any]:
+        runtime = dict(submission.input_payload.get("provider_runtime") or {})
+        strategy = submission.strategy.strip().lower()
+        cloud_type = str(runtime.get("cloudType") or ("SECURE" if strategy != "cheap" else "ALL"))
+        payload: dict[str, Any] = {
+            "name": str(runtime.get("name") or f"stablegpu-task-{submission.local_task_id}"),
+            "imageName": str(runtime.get("imageName") or runtime.get("image") or "runpod/pytorch:latest"),
+            "computeType": str(runtime.get("computeType") or "GPU"),
+            "cloudType": cloud_type,
+            "gpuTypeIds": runtime.get("gpuTypeIds") or [gpu_type_id],
+            "gpuCount": int(runtime.get("gpuCount") or submission.input_payload.get("gpu_count") or 1),
+            "volumeInGb": int(runtime.get("volumeInGb") or submission.input_payload.get("volume_gb") or 40),
+            "containerDiskInGb": int(
+                runtime.get("containerDiskInGb")
+                or submission.input_payload.get("container_disk_gb")
+                or 40
+            ),
+            "ports": runtime.get("ports") or ["22/tcp", "8888/http"],
+        }
+        optional_keys = [
+            "dockerEntrypoint",
+            "dockerStartCmd",
+            "env",
+            "interruptible",
+            "templateId",
+            "networkVolumeId",
+            "volumeMountPath",
+            "allowedCudaVersions",
+            "supportPublicIp",
+            "dataCenterIds",
+            "countryCodes",
+            "minVCPUPerGPU",
+            "minRAMPerGPU",
+            "vcpuCount",
+        ]
+        for key in optional_keys:
+            value = runtime.get(key)
+            if value is not None:
+                payload[key] = value
+        return payload
+
+    def submit_task(
+        self,
+        db: Session,
+        submission: ProviderMarketplaceTaskSubmission,
+    ) -> ProviderMarketplaceTaskHandle:
+        gpu_type_id = self._resolve_gpu_type_id(db, submission)
+        payload = self._request_json(
+            "POST",
+            self.submit_path,
+            json_body=self._build_create_payload(submission, gpu_type_id),
+        )
+        external_task_id = _pick_first(payload, "id", "podId", "external_task_id")
+        if external_task_id is None:
+            raise ProviderMarketplaceError("runpod create pod response is missing id")
+        status = str(_pick_first(payload, "desiredStatus", "status") or "submitted")
+        return ProviderMarketplaceTaskHandle(
+            external_task_id=str(external_task_id),
+            accepted=True,
+            status=status.lower(),
+            provider="runpod",
+            gpu_type=str(_pick_first(payload, "gpuTypeId", "gpu", "gpuType") or gpu_type_id),
+            message=f"runpod pod created: {status}",
+            raw_payload={**payload, "gpu_type_id": gpu_type_id},
+        )
+
+    def _map_pod_status(self, payload: dict[str, Any]) -> tuple[str, int, str]:
+        settings = get_settings()
+        desired_status = str(
+            _pick_first(payload, "desiredStatus", "status", "state") or "UNKNOWN"
+        ).strip()
+        lowered = desired_status.lower()
+        if lowered in {"terminated", "error", "failed"}:
+            return "failed", 100, desired_status
+        if lowered in {"stopping", "stopped"}:
+            return "cancelled", 100, desired_status
+        if lowered == "exited":
+            return "succeeded", 100, desired_status
+        if lowered in {"created", "provisioning", "starting"}:
+            return "provisioning", 40, desired_status
+        if lowered in {"running", "resumed"}:
+            if settings.provider_ready_state_is_success:
+                return "succeeded", 100, desired_status
+            return "running", 75, desired_status
+        return "running", 60, desired_status
+
+    def get_task_status(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceTaskStatus:
+        del db
+        path = self.status_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("GET", path)
+        normalized_status, default_progress, raw_status = self._map_pod_status(payload)
+        return ProviderMarketplaceTaskStatus(
+            external_task_id=str(_pick_first(payload, "id", "podId") or external_task_id),
+            status=normalized_status,
+            progress_percent=max(0, min(default_progress, 100)),
+            provider="runpod",
+            gpu_type=str(_pick_first(payload, "gpu", "gpuTypeId", "gpuType"))
+            if _pick_first(payload, "gpu", "gpuTypeId", "gpuType") is not None
+            else None,
+            stage=raw_status,
+            message=str(_pick_first(payload, "name", "id") or raw_status),
+            retryable=normalized_status in {"failed", "cancelled"},
+            raw_payload=payload,
+        )
+
+    def cancel_task(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceCancelResult:
+        del db
+        path = self.cancel_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("POST", path)
+        desired_status = str(_pick_first(payload, "desiredStatus", "status") or "EXITED")
+        return ProviderMarketplaceCancelResult(
+            external_task_id=str(_pick_first(payload, "id", "podId") or external_task_id),
+            cancelled=desired_status.strip().lower() in {"exited", "stopped", "terminated"},
+            status=desired_status.lower(),
+            provider="runpod",
+            message=f"runpod stop requested: {desired_status}",
+            raw_payload=payload,
+        )
+
+    def cleanup_task(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceCleanupResult:
+        del db
+        path = self.cleanup_path_template.format(external_task_id=external_task_id)
+        try:
+            payload = self._request_payload("DELETE", path)
+        except ProviderMarketplaceError as exc:
+            message = str(exc)
+            if "404" in message:
+                return ProviderMarketplaceCleanupResult(
+                    external_task_id=external_task_id,
+                    cleaned=True,
+                    status="already_gone",
+                    provider="runpod",
+                    message=message,
+                    raw_payload={},
+                )
+            raise
+
+        payload_dict = payload if isinstance(payload, dict) else {}
+        return ProviderMarketplaceCleanupResult(
+            external_task_id=str(_pick_first(payload_dict, "id", "podId") or external_task_id),
+            cleaned=True,
+            status=str(_pick_first(payload_dict, "status", "desiredStatus") or "cleaned").lower(),
+            provider="runpod",
+            message="runpod pod deleted",
+            raw_payload=payload_dict,
+        )
+
+    def collect_task_result(
+        self,
+        db: Session,
+        external_task_id: str,
+    ) -> ProviderMarketplaceResult:
+        del db
+        path = self.result_path_template.format(external_task_id=external_task_id)
+        payload = self._request_json("GET", path)
+
+        runtime_seconds = _runtime_seconds_from_datetimes(
+            _pick_first(payload, "lastStartedAt"),
+            _pick_first(payload, "lastStatusChange"),
+        ) or 600
+        hourly_cost = _safe_decimal(_pick_first(payload, "adjustedCostPerHr", "costPerHr")) or Decimal("0")
+        provider_cost = (
+            (hourly_cost * Decimal(str(runtime_seconds)) / Decimal("3600")).quantize(
+                Decimal("0.0001")
+            )
+            if hourly_cost > 0
+            else Decimal("0")
+        )
+
+        pod_console_url = f"https://www.runpod.io/console/pods/{external_task_id}"
+        artifact = ProviderMarketplaceArtifact(
+            kind="runtime_manifest",
+            uri=pod_console_url,
+            download_url=pod_console_url,
+            metadata={
+                "provider": "runpod",
+                "pod_id": external_task_id,
+                "desired_status": _pick_first(payload, "desiredStatus", "status"),
+            },
+        )
+        return ProviderMarketplaceResult(
+            external_task_id=external_task_id,
+            status="succeeded",
+            provider="runpod",
+            summary=str(
+                _pick_first(payload, "name", "desiredStatus", "status")
+                or "runpod runtime ready"
+            ),
+            artifacts=[artifact],
+            usage={
+                "billable_seconds": runtime_seconds,
+                "provider_cost": float(provider_cost),
+                "hourly_price": float(hourly_cost),
+            },
+            raw_payload=payload,
         )
 
 
@@ -757,6 +1439,7 @@ def build_provider_marketplace_adapter() -> ProviderMarketplaceAdapter:
         return RunpodMarketplaceAdapter(
             marketplace_name="runpod",
             base_url=settings.runpod_base_url,
+            graphql_url=settings.runpod_graphql_url,
             api_key=settings.runpod_api_key,
             request_timeout_seconds=settings.runpod_request_timeout_seconds,
             offers_path=settings.runpod_offers_path,
@@ -782,6 +1465,7 @@ def build_provider_marketplace_adapter() -> ProviderMarketplaceAdapter:
         runpod_adapter = RunpodMarketplaceAdapter(
             marketplace_name="runpod",
             base_url=settings.runpod_base_url,
+            graphql_url=settings.runpod_graphql_url,
             api_key=settings.runpod_api_key,
             request_timeout_seconds=settings.runpod_request_timeout_seconds,
             offers_path=settings.runpod_offers_path,

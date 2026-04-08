@@ -1,6 +1,6 @@
-# 建议优化项（非阻断）
+# Nice to Have
 
-1. 为 Vast/Runpod 增加更细粒度的官方字段映射（按真实账号返回结构持续收敛）。
-2. 监控接口增加时间窗口维度（近 1h/24h/7d）与错误分类聚合。
-3. 下载入口增加签名 URL 过期时间与一次性令牌策略。
-4. 为 cleanup 失败场景增加专门告警与补偿任务（异步 cleanup worker）。
+1. Add stricter completion semantics per provider (job-finished vs runtime-ready).
+2. Add provider-specific telemetry fields in monitoring (`stockStatus`, `cloudType`, region detail).
+3. Add signed URL policy and TTL strategy for external artifact download links.
+4. Add asynchronous cleanup reconciliation worker for delayed provider cleanup failures.

@@ -1,9 +1,8 @@
-# 必须修复项（当前轮次）
+# Must Fix
 
-1. 生产环境尚未注入真实 provider 密钥：
+1. Inject production provider keys on server:
    - `STABLEGPU_VAST_AI_API_KEY`
    - `STABLEGPU_RUNPOD_API_KEY`
 
-影响：
-- 无法完成 `multi_provider_live` 的真实执行链路验收（尤其 Runpod 下发与状态查询）。
-
+Impact:
+- Without keys, `multi_provider_live` cannot complete full online acceptance for real provider dispatch.

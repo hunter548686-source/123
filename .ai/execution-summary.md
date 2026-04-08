@@ -1,36 +1,35 @@
-# 执行总结（2026-04-08）
+# Execution Summary (2026-04-08)
 
-## 本轮目标
-完成：
-1. HTTPS 上线
-2. 真实 Vast/Runpod adapter 切换准备
-3. 线上验收报告
+## Stage
+Execution stage for real provider adapter upgrade.
 
-## 已完成项
-- 服务器代码已更新到 `main` 最新提交。
-- 已在 VPS 成功执行 `infra/deploy/enable_https.sh`。
-- 线上已可通过 HTTPS 访问：
-  - `https://gpu.144.202.58.159.sslip.io`
-  - `https://gpu.144.202.58.159.sslip.io/api/health`
-- 部署脚本体系已完善：
-  - `install_linux.sh`
-  - `enable_https.sh`
-  - `switch_to_live_adapter.sh`
-  - `provider_preflight.py`
-- Provider 适配默认值已修正：
-  - Vast offers 默认路径改为 `/bundles/`
-  - 同步更新 `.env.example`
-- 自动化回归测试通过：`15 passed`
+## Completed
+- Replaced provider adapter contract from generic `/tasks` style to real provider lifecycle:
+  - Vast.ai: `POST /bundles/`, `PUT /asks/{offer_id}/`, `GET/DELETE /instances/{id}/`
+  - Runpod: GraphQL `gpuTypes` + REST `/pods` lifecycle
+- Added robust provider mapping logic:
+  - offer/gpu resolution from quote snapshot or provider query fallback
+  - normalized status mapping to worker state machine
+  - cancel + cleanup + result collection for both providers
+  - runtime/cost extraction and artifact generation for delivery chain continuity
+- Updated deployment scripts to enforce real path defaults during live switch.
+- Updated preflight checker to validate real Vast + Runpod paths (including Runpod GraphQL).
+- Added/updated automated tests for real adapter contracts.
 
-## 真实 Adapter 切换进度
-- 已完成“切换脚本 + 预检脚本 + 验证流程”落地。
-- 未执行生产切换到 `multi_provider_live`（保持当前线上稳定）。
+## In Progress
+- Final live server switch validation with real keys (blocked by missing Runpod key in current environment).
 
-原因：
-- 当前未发现可用 `STABLEGPU_VAST_AI_API_KEY` 与 `STABLEGPU_RUNPOD_API_KEY`。
-- 无密钥强行切换会导致线上执行阶段不可控失败。
+## Pending
+- Inject production keys and run one end-to-end live task on `multi_provider_live`.
+- Update online acceptance report with real provider execution evidence.
 
-## 风险结论
-- HTTPS 已完成，线上入口达到可生产访问标准。
-- 真实 provider 切换处于“最后一公里”：仅缺生产 API Key 注入与一次最终切换验收。
+## Risk / Assumptions
+- Current environment still lacks `STABLEGPU_RUNPOD_API_KEY`; live Runpod verification cannot pass until key is provided.
+- `provider_ready_state_is_success=true` is enabled to keep lifecycle stable for MVP dispatch; this can be tightened in next round for strict “job-finished” semantics.
 
+## Next Step
+- Run on server:
+  - `bash infra/deploy/switch_to_live_adapter.sh`
+  - `python3 infra/deploy/provider_preflight.py`
+  - `python3 -m apps.worker.worker.main --limit 1`
+- Then record final evidence in `.ai/online-acceptance-report-2026-04-08.md`.

@@ -1,119 +1,106 @@
-# API 契约（本轮增量）
+# API Contract (Current Stage)
 
-## 1. 任务产物下载 URL
-### Request
-- `GET /api/tasks/{task_id}/artifacts/{artifact_id}/download`
+## Goal
+Define the real provider adapter contract used by worker execution:
+1. `list_offers`
+2. `submit_task`
+3. `get_task_status`
+4. `cancel_task`
+5. `cleanup_task`
+6. `collect_task_result`
 
-### Response 200
-```json
-{
-  "artifact_id": 1,
-  "download_url": "https://download.example.com/task-1.mp4",
-  "source": "download_url"
-}
-```
+The scheduler consumes normalized objects only:
+- `ProviderMarketplaceTaskHandle`
+- `ProviderMarketplaceTaskStatus`
+- `ProviderMarketplaceCancelResult`
+- `ProviderMarketplaceCleanupResult`
+- `ProviderMarketplaceResult`
 
-### Error
-- `404`：artifact 不存在或不属于该任务。
-- `409`：产物尚无可下载 URL。
+---
 
-## 2. 后台监控总览
-### Request
-- `GET /api/admin/monitoring/overview`
+## Vast.ai Adapter Contract
 
-### Response 200（示例）
-```json
-{
-  "status_breakdown": {
-    "queued": 2,
-    "running": 3,
-    "retrying": 1,
-    "cancelling": 0,
-    "cleaning_up": 1,
-    "failed": 4,
-    "completed": 8,
-    "cancelled": 1
-  },
-  "active_runs": 3,
-  "queued_for_retry": 1,
-  "pending_cleanup": 1,
-  "open_cancellations": 0,
-  "recent_provider_cost": 123.45,
-  "recent_runtime_seconds": 9876,
-  "adapter_key": "multi_provider_live",
-  "marketplace_name": "vast-runpod-live",
-  "recent_failures": []
-}
-```
+### Offer Fetch
+- Endpoint: `POST {VAST_BASE_URL}/bundles/`
+- Input body: availability filters (verified/rentable/limit/order)
+- Output mapping:
+  - `offer_id` from `id|ask_id|ask|bundle_id`
+  - `gpu_type` from `gpu_name|gpu|model_name`
+  - `price_per_hour` from `dph_total|dph|hourly_cost`
 
-## 3. 任务详情产物字段扩展
-`GET /api/tasks/{task_id}` 中的 `artifacts[]` 新增：
-- `download_url: string | null`
-- `checksum: string | null`
-- `metadata_payload: object | null`
+### Task Submit
+- Endpoint: `PUT {VAST_BASE_URL}/asks/{offer_id}/`
+- Body source: `task.input_payload.provider_runtime` + stable defaults
+- Handle mapping:
+  - `external_task_id` from `new_contract|instance_id|id|contract_id`
+  - provider fixed to `vast.ai`
 
-## 4. 首页实时指标（公开接口）
-### Request
-- `GET /api/home/metrics`
+### Status Query
+- Endpoint: `GET {VAST_BASE_URL}/instances/{id}/`
+- Status normalization:
+  - `running/ready/online` -> `succeeded` (when `provider_ready_state_is_success=true`)
+  - `creating/loading/starting` -> `provisioning`
+  - `offline/error/failed` -> `failed`
+  - `destroyed/terminated/exited` -> `cancelled`
 
-### Response 200（示例）
-```json
-{
-  "average_delivery_seconds": 520,
-  "success_rate_7d": 97.6,
-  "provider_count": 3,
-  "cost_visibility_coverage": 100.0,
-  "sample_size_7d": 42,
-  "completed_tasks_7d": 41,
-  "updated_at": "2026-04-08T01:12:00+00:00"
-}
-```
+### Cancel / Cleanup
+- Cancel endpoint: `DELETE {VAST_BASE_URL}/instances/{id}/`
+- Cleanup endpoint: `DELETE {VAST_BASE_URL}/instances/{id}/`
+- 404 during cleanup is treated as already cleaned.
 
-## 5. 后台任务运营接口
-### Request
-- `GET /api/admin/tasks`
-- `GET /api/admin/tasks/{task_id}`
-- `POST /api/admin/tasks/{task_id}/retry`
-- `POST /api/admin/tasks/{task_id}/cancel`
+### Result Collection
+- Endpoint: `GET {VAST_BASE_URL}/instances/{id}/`
+- Produces at least one artifact (`runtime_manifest`) with an HTTP URL.
+- Produces usage:
+  - `billable_seconds`
+  - `provider_cost`
+  - `hourly_price`
 
-### Response（`GET /api/admin/tasks` 示例）
-```json
-{
-  "items": [
-    {
-      "id": 1024,
-      "status": "running",
-      "workflow_stage": "execution"
-    }
-  ],
-  "summary": {
-    "total": 30,
-    "running": 4,
-    "failed": 2,
-    "completed": 20
-  }
-}
-```
+---
 
-## 6. 后台用户概览接口
-### Request
-- `GET /api/admin/users`
+## Runpod Adapter Contract
 
-### Response 200（示例）
-```json
-[
-  {
-    "id": 1,
-    "email": "owner@example.com",
-    "role": "admin",
-    "status": "active",
-    "wallet_balance": 328.4,
-    "frozen_balance": 36.0,
-    "total_tasks": 12,
-    "running_tasks": 1,
-    "completed_tasks": 10,
-    "failed_tasks": 1,
-    "created_at": "2026-04-06T10:00:00+08:00"
-  }
-]
-```
+### Offer Fetch (GraphQL)
+- Endpoint: `{RUNPOD_GRAPHQL_URL}?api_key=...`
+- Query: `gpuTypes + lowestPrice`
+- Output mapping:
+  - `gpu_type` from `displayName|id`
+  - `price_per_hour` from `lowestPrice.uninterruptablePrice|minimumBidPrice`
+  - raw payload keeps `id` for submit routing.
+
+### Task Submit (REST)
+- Endpoint: `POST {RUNPOD_BASE_URL}/pods`
+- Body source: `task.input_payload.provider_runtime` + stable defaults
+- Requires resolved `gpuTypeId` from quote/raw offer.
+- Handle mapping:
+  - `external_task_id` from `id|podId`
+
+### Status Query
+- Endpoint: `GET {RUNPOD_BASE_URL}/pods/{id}`
+- Status normalization:
+  - `RUNNING` -> `succeeded` (when `provider_ready_state_is_success=true`)
+  - `EXITED` -> `succeeded`
+  - `CREATED/STARTING` -> `provisioning`
+  - `TERMINATED/ERROR/FAILED` -> `failed`
+
+### Cancel / Cleanup
+- Cancel endpoint: `POST {RUNPOD_BASE_URL}/pods/{id}/stop`
+- Cleanup endpoint: `DELETE {RUNPOD_BASE_URL}/pods/{id}`
+- 404 during cleanup is treated as already cleaned.
+
+### Result Collection
+- Endpoint: `GET {RUNPOD_BASE_URL}/pods/{id}`
+- Produces artifact (`runtime_manifest`) with Runpod console URL.
+- Produces usage:
+  - `billable_seconds` (derived from start/status timestamps)
+  - `provider_cost`
+  - `hourly_price`
+
+---
+
+## Internal API Surfaces Using This Contract
+- Worker scheduler execution loop: `apps/worker/worker/scheduler.py`
+- Monitoring aggregation:
+  - `GET /api/admin/monitoring/overview`
+  - `GET /api/tasks/{task_id}`
+  - `GET /api/tasks/{task_id}/artifacts/{artifact_id}/download`

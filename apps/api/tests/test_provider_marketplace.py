@@ -83,8 +83,9 @@ def test_remote_marketplace_contract_calls_generic_http_gateway(
     calls: list[tuple[str, str, dict | None, dict[str, str]]] = []
 
     class FakeResponse:
-        def __init__(self, payload: dict):
+        def __init__(self, payload: dict, status_code: int = 200):
             self._payload = payload
+            self.status_code = status_code
 
         def raise_for_status(self) -> None:
             return None
@@ -194,15 +195,31 @@ def test_remote_marketplace_contract_calls_generic_http_gateway(
     get_settings.cache_clear()
 
 
-def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatch):
+def test_vast_adapter_uses_bundles_asks_instances_contract(client, monkeypatch):
     monkeypatch.setenv("STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER", "vast_ai")
     monkeypatch.setenv("STABLEGPU_VAST_AI_API_KEY", "vast-key")
     monkeypatch.setenv("STABLEGPU_VAST_AI_BASE_URL", "https://vast.example/api/v0")
+    monkeypatch.setenv("STABLEGPU_VAST_AI_OFFERS_PATH", "/bundles/")
+    monkeypatch.setenv("STABLEGPU_VAST_AI_SUBMIT_PATH", "/asks/{offer_id}/")
+    monkeypatch.setenv(
+        "STABLEGPU_VAST_AI_STATUS_PATH_TEMPLATE", "/instances/{external_task_id}/"
+    )
+    monkeypatch.setenv(
+        "STABLEGPU_VAST_AI_CANCEL_PATH_TEMPLATE", "/instances/{external_task_id}/"
+    )
+    monkeypatch.setenv(
+        "STABLEGPU_VAST_AI_CLEANUP_PATH_TEMPLATE", "/instances/{external_task_id}/"
+    )
+    monkeypatch.setenv(
+        "STABLEGPU_VAST_AI_RESULT_PATH_TEMPLATE", "/instances/{external_task_id}/"
+    )
+    monkeypatch.setenv("STABLEGPU_PROVIDER_READY_STATE_IS_SUCCESS", "true")
     get_settings.cache_clear()
 
     class FakeResponse:
-        def __init__(self, payload: dict):
+        def __init__(self, payload: dict, status_code: int = 200):
             self._payload = payload
+            self.status_code = status_code
 
         def raise_for_status(self) -> None:
             return None
@@ -210,14 +227,18 @@ def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatc
         def json(self) -> dict:
             return self._payload
 
+    calls: list[tuple[str, str, dict | None]] = []
+
     def fake_vast_request(method, url, headers=None, json=None, timeout=None):
-        del json, timeout
+        del timeout
         assert headers is not None and headers.get("Authorization") == "Bearer vast-key"
-        if method == "GET" and (url.endswith("/offers") or url.endswith("/bundles/")):
+        calls.append((method, url, json))
+        if method == "POST" and url.endswith("/bundles/"):
             return FakeResponse(
                 {
                     "offers": [
                         {
+                            "id": 321,
                             "gpu_name": "RTX 4090",
                             "dph_total": 0.39,
                             "region": "us-west",
@@ -228,6 +249,22 @@ def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatc
                     ]
                 }
             )
+        if method == "PUT" and url.endswith("/asks/321/"):
+            return FakeResponse({"success": True, "new_contract": "vast-instance-42"})
+        if method == "GET" and url.endswith("/instances/vast-instance-42/"):
+            return FakeResponse(
+                {
+                    "instances": {
+                        "id": "vast-instance-42",
+                        "actual_status": "running",
+                        "gpu_name": "RTX 4090",
+                        "dph_total": 0.39,
+                        "label": "stablegpu-task-1",
+                    }
+                }
+            )
+        if method == "DELETE" and url.endswith("/instances/vast-instance-42/"):
+            return FakeResponse({"success": True, "msg": "ok"})
         raise AssertionError(f"unexpected request: {method} {url}")
 
     monkeypatch.setattr(provider_marketplace_module.httpx, "request", fake_vast_request)
@@ -235,33 +272,117 @@ def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatc
     with session_scope() as db:
         service = ProviderMarketplaceService()
         offers = service.list_offers(db)
+        submission = ProviderMarketplaceTaskSubmission(
+            local_task_id=1,
+            task_type="video_generation",
+            template_id="tmpl",
+            strategy="stable",
+            execution_mode="hybrid",
+            input_payload={"prompt": "hello"},
+            preferred_gpu_type="RTX 4090",
+        )
+        handle = service.submit_task(db, submission)
+        status = service.get_task_status(db, handle.external_task_id)
+        cancel = service.cancel_task(db, handle.external_task_id)
+        cleanup = service.cleanup_task(db, handle.external_task_id)
+        result = service.collect_task_result(db, handle.external_task_id)
 
     assert service.adapter_key == "vast_ai"
     assert offers[0].provider == "vast.ai"
     assert offers[0].gpu_type == "RTX 4090"
     assert str(offers[0].price_per_hour) == "0.39"
+    assert handle.external_task_id == "vast-instance-42"
+    assert status.status == "succeeded"
+    assert status.provider == "vast.ai"
+    assert cancel.cancelled is True
+    assert cleanup.cleaned is True
+    assert result.provider == "vast.ai"
+    assert result.artifacts
+    assert result.artifacts[0].uri.endswith("/instances/vast-instance-42/")
+    assert any(call[0] == "PUT" and call[1].endswith("/asks/321/") for call in calls)
+    assert any(call[0] == "POST" and call[1].endswith("/bundles/") for call in calls)
+    get_settings.cache_clear()
 
+
+def test_runpod_adapter_uses_graphql_offers_and_rest_pods_contract(client, monkeypatch):
     monkeypatch.setenv("STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER", "runpod")
     monkeypatch.setenv("STABLEGPU_RUNPOD_API_KEY", "runpod-key")
     monkeypatch.setenv("STABLEGPU_RUNPOD_BASE_URL", "https://runpod.example/v1")
+    monkeypatch.setenv("STABLEGPU_RUNPOD_GRAPHQL_URL", "https://api.runpod.io/graphql")
+    monkeypatch.setenv("STABLEGPU_RUNPOD_SUBMIT_PATH", "/pods")
+    monkeypatch.setenv("STABLEGPU_RUNPOD_STATUS_PATH_TEMPLATE", "/pods/{external_task_id}")
+    monkeypatch.setenv(
+        "STABLEGPU_RUNPOD_CANCEL_PATH_TEMPLATE", "/pods/{external_task_id}/stop"
+    )
+    monkeypatch.setenv(
+        "STABLEGPU_RUNPOD_CLEANUP_PATH_TEMPLATE", "/pods/{external_task_id}"
+    )
+    monkeypatch.setenv(
+        "STABLEGPU_RUNPOD_RESULT_PATH_TEMPLATE", "/pods/{external_task_id}"
+    )
+    monkeypatch.setenv("STABLEGPU_PROVIDER_READY_STATE_IS_SUCCESS", "true")
     get_settings.cache_clear()
 
+    class FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return self._payload
+
+    calls: list[tuple[str, str, dict | None, dict[str, str]]] = []
+
     def fake_runpod_request(method, url, headers=None, json=None, timeout=None):
-        del json, timeout
-        assert headers is not None and headers.get("Authorization") == "Bearer runpod-key"
-        if method == "GET" and url.endswith("/offers"):
+        del timeout
+        calls.append((method, url, json, headers or {}))
+        if method == "POST" and "api.runpod.io/graphql" in url:
             return FakeResponse(
                 {
-                    "offers": [
-                        {
-                            "displayName": "A100 80GB",
-                            "secureCloud": {"lowestPrice": 1.29},
-                            "region": "us-east",
-                            "successRate": 0.96,
-                        }
-                    ]
+                    "data": {
+                        "gpuTypes": [
+                            {
+                                "id": "NVIDIA RTX A6000",
+                                "displayName": "RTX A6000",
+                                "memoryInGb": 48,
+                                "lowestPrice": {
+                                    "minimumBidPrice": 0.21,
+                                    "uninterruptablePrice": 0.39,
+                                    "stockStatus": "High",
+                                },
+                            }
+                        ]
+                    }
                 }
             )
+        if method == "POST" and url.endswith("/pods"):
+            return FakeResponse(
+                {
+                    "id": "pod-123",
+                    "desiredStatus": "RUNNING",
+                    "gpuTypeId": "NVIDIA RTX A6000",
+                    "name": "stablegpu-task-9",
+                }
+            )
+        if method == "GET" and url.endswith("/pods/pod-123"):
+            return FakeResponse(
+                {
+                    "id": "pod-123",
+                    "desiredStatus": "RUNNING",
+                    "gpuTypeId": "NVIDIA RTX A6000",
+                    "adjustedCostPerHr": 0.39,
+                    "lastStartedAt": "2026-04-08T01:00:00Z",
+                    "lastStatusChange": "2026-04-08T01:10:00Z",
+                    "name": "stablegpu-task-9",
+                }
+            )
+        if method == "POST" and url.endswith("/pods/pod-123/stop"):
+            return FakeResponse({"id": "pod-123", "desiredStatus": "EXITED"})
+        if method == "DELETE" and url.endswith("/pods/pod-123"):
+            return FakeResponse({})
         raise AssertionError(f"unexpected request: {method} {url}")
 
     monkeypatch.setattr(provider_marketplace_module.httpx, "request", fake_runpod_request)
@@ -269,11 +390,33 @@ def test_vast_and_runpod_adapters_normalize_provider_payloads(client, monkeypatc
     with session_scope() as db:
         service = ProviderMarketplaceService()
         offers = service.list_offers(db)
+        submission = ProviderMarketplaceTaskSubmission(
+            local_task_id=9,
+            task_type="video_generation",
+            template_id="template-b",
+            strategy="stable",
+            execution_mode="hybrid",
+            input_payload={"prompt": "runpod"},
+            preferred_gpu_type="RTX A6000",
+        )
+        handle = service.submit_task(db, submission)
+        status = service.get_task_status(db, handle.external_task_id)
+        cancel = service.cancel_task(db, handle.external_task_id)
+        cleanup = service.cleanup_task(db, handle.external_task_id)
+        result = service.collect_task_result(db, handle.external_task_id)
 
     assert service.adapter_key == "runpod"
     assert offers[0].provider == "runpod"
-    assert offers[0].gpu_type == "A100 80GB"
-    assert str(offers[0].price_per_hour) == "1.29"
+    assert offers[0].gpu_type == "RTX A6000"
+    assert str(offers[0].price_per_hour) == "0.39"
+    assert handle.external_task_id == "pod-123"
+    assert status.status == "succeeded"
+    assert cancel.cancelled is True
+    assert cleanup.cleaned is True
+    assert result.provider == "runpod"
+    assert result.artifacts[0].download_url is not None
+    assert any("api.runpod.io/graphql" in call[1] for call in calls)
+    assert any(call[1].endswith("/pods") for call in calls)
     get_settings.cache_clear()
 
 

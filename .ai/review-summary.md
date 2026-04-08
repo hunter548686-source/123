@@ -1,16 +1,16 @@
-# 审查总结（2026-04-08）
+# Review Summary (2026-04-08)
 
-## Web 系统层
-- HTTPS 已启用，公网可访问。
-- 前后端路由与 API 健康检查正常。
-- 后台入口、任务链路和基础监控可用。
+## Web System Layer
+- API contracts are consistent with worker execution for task lifecycle and monitoring.
+- Artifact download chain remains valid because provider result now always includes an HTTP artifact URL.
+- Admin monitoring can now reflect real adapter key/name and provider cost/runtime aggregates.
 
-## AI Agent / 调度层
-- Provider 适配层已具备真实切换机制（`multi_provider_live`）。
-- Vast 报价路径已修正到真实可用接口（`/bundles/`）。
-- 预检脚本可在切换前识别连通性与鉴权问题。
+## Agent / Scheduling Layer
+- GPT planning/review roles remain unchanged.
+- Local executor path remains unchanged and compatible.
+- Provider adapter now uses real endpoints for Vast and Runpod.
+- Retry, cancel, cleanup, and result-collection flows are fully wired to provider actions.
 
-## 审查结论
-- 基础上线质量通过。
-- 仍有 1 个必须修复项：生产 provider API Key 缺失，导致无法完成真实 provider 全链路执行验收。
-
+## Conclusion
+- Implementation quality is acceptable for this stage.
+- One blocker remains before full production acceptance: Runpod key injection and one live task validation.

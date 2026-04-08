@@ -62,7 +62,11 @@ bash infra/deploy/switch_to_live_adapter.sh
 This will:
 
 - set `STABLEGPU_PROVIDER_MARKETPLACE_ADAPTER=multi_provider_live`
+- set provider contract paths:
+  - Vast.ai: `bundles -> asks -> instances`
+  - Runpod: `GraphQL gpuTypes + REST pods`
 - inject Vast.ai and Runpod API keys into env file
+- set `STABLEGPU_RUNPOD_GRAPHQL_URL` and `STABLEGPU_PROVIDER_READY_STATE_IS_SUCCESS=true`
 - restart `stablegpu-api.service` and `stablegpu-worker.service`
 
 Preflight check before/after switching:

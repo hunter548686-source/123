@@ -1,51 +1,46 @@
-# API 变更
+# API Changes (2026-04-08)
 
-## 新增接口
+## Summary
+This round moved provider integration from generic mock-style task paths to real provider contracts:
+- Vast.ai: `bundles -> asks -> instances`
+- Runpod: `GraphQL gpuTypes -> REST pods`
 
-### 1) 产物下载入口
-- `GET /api/tasks/{task_id}/artifacts/{artifact_id}/download`
-- 作用：返回可下载 URL（由 API 统一解析）。
-- 返回示例：
-```json
-{
-  "artifact_id": 12,
-  "download_url": "https://download.example.com/task-12.mp4",
-  "source": "download_url"
-}
-```
+## Config Defaults Updated
+- `STABLEGPU_VAST_AI_SUBMIT_PATH=/asks/{offer_id}/`
+- `STABLEGPU_VAST_AI_STATUS_PATH_TEMPLATE=/instances/{external_task_id}/`
+- `STABLEGPU_VAST_AI_CANCEL_PATH_TEMPLATE=/instances/{external_task_id}/`
+- `STABLEGPU_VAST_AI_RESULT_PATH_TEMPLATE=/instances/{external_task_id}/`
+- `STABLEGPU_VAST_AI_CLEANUP_PATH_TEMPLATE=/instances/{external_task_id}/`
+- `STABLEGPU_RUNPOD_GRAPHQL_URL=https://api.runpod.io/graphql`
+- `STABLEGPU_RUNPOD_OFFERS_PATH=/gpu-types` (kept for compatibility, GraphQL is used for offers)
+- `STABLEGPU_RUNPOD_SUBMIT_PATH=/pods`
+- `STABLEGPU_RUNPOD_STATUS_PATH_TEMPLATE=/pods/{external_task_id}`
+- `STABLEGPU_RUNPOD_CANCEL_PATH_TEMPLATE=/pods/{external_task_id}/stop`
+- `STABLEGPU_RUNPOD_RESULT_PATH_TEMPLATE=/pods/{external_task_id}`
+- `STABLEGPU_RUNPOD_CLEANUP_PATH_TEMPLATE=/pods/{external_task_id}`
+- `STABLEGPU_PROVIDER_READY_STATE_IS_SUCCESS=true`
 
-### 2) 监控总览
-- `GET /api/admin/monitoring/overview`
-- 作用：后台展示状态分布、运行态、重试/cleanup/取消队列、成本汇总、最近失败任务。
+## Provider Adapter Behavior Changes
+- Vast adapter now:
+  - posts to `/bundles/` for offers
+  - resolves `offer_id` from quote/raw payload or fresh offers
+  - creates instances via `PUT /asks/{offer_id}/`
+  - uses instance lifecycle for status/cancel/cleanup/result
+- Runpod adapter now:
+  - fetches GPU offers via GraphQL `gpuTypes`
+  - resolves `gpuTypeId` from quote/raw payload or fresh offers
+  - creates pods via `POST /pods`
+  - uses pod lifecycle for status/cancel/cleanup/result
 
-### 3) 首页实时指标（公开）
-- `GET /api/home/metrics`
-- 作用：为首页提供真实业务指标（无需登录），用于替代静态展示值。
-- 返回字段：
-  - `average_delivery_seconds`
-  - `success_rate_7d`
-  - `provider_count`
-  - `cost_visibility_coverage`
-  - `sample_size_7d`
-  - `completed_tasks_7d`
-  - `updated_at`
+## Deployment Script Changes
+- `infra/deploy/switch_to_live_adapter.sh` now force-upserts all provider contract paths to avoid stale `/tasks` routes in old `.env`.
+- `infra/deploy/install_linux.sh` now writes the same contract defaults when initializing env.
+- `infra/deploy/provider_preflight.py` now validates:
+  - Vast bundles query (POST)
+  - Runpod REST auth + GraphQL `gpuTypes` query
 
-### 4) 后台任务运营接口
-- `GET /api/admin/tasks`
-  - 返回全量任务列表 + 后台汇总统计。
-- `GET /api/admin/tasks/{task_id}`
-  - 返回后台任务详情（run/events/artifacts/review chain）。
-- `POST /api/admin/tasks/{task_id}/retry`
-  - 后台手动重试任务。
-- `POST /api/admin/tasks/{task_id}/cancel`
-  - 后台手动取消任务。
-
-### 5) 后台用户概览接口
-- `GET /api/admin/users`
-- 作用：后台查看用户角色、钱包余额、任务统计（total/running/completed/failed）。
-
-## 现有接口响应扩展
-- `GET /api/tasks/{task_id}` 的 `artifacts[]` 新增：
-  - `download_url`
-  - `checksum`
-  - `metadata_payload`
+## Tests Updated
+- `apps/api/tests/test_provider_marketplace.py`
+  - Added Vast real-contract lifecycle test.
+  - Added Runpod GraphQL+REST lifecycle test.
+  - Kept generic remote adapter contract test.
